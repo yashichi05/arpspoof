@@ -11,8 +11,11 @@
 #include <string.h>
 #include <ifaddrs.h>
 #include <linux/rtnetlink.h>
-
-#include "getGateway.h"
+#include <unistd.h>
+#include <memory.h>
+#include <sys/types.h>
+#include <linux/types.h>
+#include <linux/netlink.h>
 
 #define IPLEN 4
 struct opts
@@ -40,9 +43,91 @@ struct arp_packet
 	char target_mac[6];
 	int target_ip;
 };
+
+struct route_req
+{
+	struct nlmsghdr msghdr;
+	struct rtmsg msg;
+};
+struct gateway_data
+{
+	int gateway;
+	int interface_index;
+};
+
+void get_data(struct nlmsghdr *resp, struct gateway_data *data)
+{
+	struct rtmsg *route = (struct rtmsg *)NLMSG_DATA(resp); // 取得nlmsghdr 之後的資料
+
+	struct rtattr *route_attr = (struct rtattr *)RTM_RTA(route);
+	int resp_len = RTM_PAYLOAD(resp);
+
+	while (RTA_OK(route_attr, resp_len))
+	{
+		if (route_attr->rta_type == RTA_GATEWAY)
+		{
+			memcpy(&data->gateway, RTA_DATA(route_attr), sizeof(int));
+		}
+		else if (route_attr->rta_type == RTA_OIF)
+		{
+			memcpy(&data->interface_index, RTA_DATA(route_attr), sizeof(int));
+		}
+		route_attr = RTA_NEXT(route_attr, resp_len);
+	}
+}
+int get_msg(int fd, int index)
+{
+	char *buffer[1024];
+	int buffer_len = recv(fd, buffer, sizeof(buffer), 0);
+
+	struct nlmsghdr *resp = (struct nlmsghdr *)buffer;
+	while (NLMSG_OK(resp, buffer_len))
+	{
+		if (resp->nlmsg_type == NLMSG_ERROR)
+		{
+			printf("msg error\n");
+		}
+		struct gateway_data result;
+		memset(&result, 0, sizeof(result));
+		get_data(resp, &result);
+		if (result.interface_index == index)
+		{
+
+			return result.gateway;
+		}
+
+		resp = NLMSG_NEXT(resp, buffer_len);
+	}
+	return -1;
+}
+
 void getGatewayAddr(struct opts *options)
 {
-	options->gateway_ip = getGateway(options->interface_index);
+	int target_index = options->interface_index;
+	int fd = socket(AF_NETLINK, SOCK_RAW, NETLINK_ROUTE);
+
+	struct route_req req;
+	memset(&req, 0, sizeof(req));
+	req.msghdr.nlmsg_len = NLMSG_LENGTH(sizeof(struct rtmsg));
+	req.msghdr.nlmsg_type = RTM_GETROUTE;
+	req.msghdr.nlmsg_flags = NLM_F_DUMP | NLM_F_REQUEST;
+
+	req.msg.rtm_family = AF_INET;
+	req.msg.rtm_type = RTN_UNICAST;
+
+	struct sockaddr_nl addr;
+	memset(&addr, 0, sizeof(struct sockaddr_nl));
+	addr.nl_family = AF_NETLINK;
+	addr.nl_pid = 0;
+	addr.nl_groups = 0;
+
+	if (sendto(fd, &req, sizeof(req), 0, (struct sockaddr *)&addr, sizeof(addr)) < 0)
+	{
+		printf("send error\n");
+		exit(EXIT_FAILURE);
+	}
+
+	options->gateway_ip = get_msg(fd, target_index);
 }
 void getTargetAddr(struct opts *options)
 {
@@ -154,8 +239,13 @@ int main(int argc, char *argv[])
 	getSelfAddr(options);
 	getGatewayAddr(options);
 	getTargetAddr(options);
+	
 	// replyArp(0, options);
 	// replyArp(1, options);
 
 	return EXIT_SUCCESS;
 }
+//    uint32_t ip = options->gateway_ip;
+//     struct in_addr ip_addr;
+//     ip_addr.s_addr = ip;
+//     printf("The IP address is %s\n", inet_ntoa(ip_addr));
