@@ -12,6 +12,8 @@
 #include <ifaddrs.h>
 #include <linux/rtnetlink.h>
 
+#include "getGateway.h"
+
 #define IPLEN 4
 struct opts
 {
@@ -24,6 +26,7 @@ struct opts
 	unsigned char gateway_mac[6];
 	unsigned int target_ip;
 	unsigned char target_mac[6];
+	int interface_index;
 };
 struct arp_packet
 {
@@ -39,23 +42,7 @@ struct arp_packet
 };
 void getGatewayAddr(struct opts *options)
 {
-	struct ifaddrs *data, *item;
-	getifaddrs(&data);
-	item = data;
-	do
-	{
-
-		if (strcmp(options->argv_i, item->ifa_name) == 0 && item->ifa_addr->sa_family == AF_INET)
-		{
-			break;
-		}
-
-	} while (item = item->ifa_next);
-	 struct rtattr a;
-	 int s = socket(AF_NETLINK,SOCK_RAW,NETLINK_ROUTE);
-	 struct nlmsghdr *nlmsg;
-	 int c = send(s, nlmsg, sizeof(nlmsg), 0);
-	// memcpy((void *)&options->gateway_ip, (void *)item->ifa_addr + 4, IPLEN);
+	options->gateway_ip = getGateway(options->interface_index);
 }
 void getTargetAddr(struct opts *options)
 {
@@ -66,7 +53,14 @@ void getSelfAddr(struct opts *options)
 	struct ifreq ifr;
 	memset((void *)&ifr, 0, sizeof(ifr));
 	strncpy(ifr.ifr_name, options->argv_i, sizeof(ifr.ifr_name));
-	ioctl(options->sock_fd, SIOCADDRT, &ifr);
+
+	if (ioctl(options->sock_fd, SIOCGIFINDEX, &ifr) == -1)
+	{
+		printf("ioctl error\n");
+		exit(EXIT_FAILURE);
+	}
+	memcpy((void *)&options->interface_index, (void *)&ifr.ifr_ifindex, sizeof(int));
+
 	if (ioctl(options->sock_fd, SIOCGIFADDR, &ifr) == -1)
 	{
 		printf("ioctl error\n");
@@ -150,10 +144,6 @@ void getArgv(int argc, char *argv[], struct opts *options)
 		printf("socket error\n");
 		exit(EXIT_FAILURE);
 	}
-
-	getSelfAddr(options);
-	getGatewayAddr(options);
-	getTargetAddr(options);
 }
 
 int main(int argc, char *argv[])
@@ -161,8 +151,11 @@ int main(int argc, char *argv[])
 	struct opts *options;
 	memset((void *)options, 0, sizeof(options));
 	getArgv(argc, argv, options);
-	replyArp(0, options);
-	replyArp(1, options);
+	getSelfAddr(options);
+	getGatewayAddr(options);
+	getTargetAddr(options);
+	// replyArp(0, options);
+	// replyArp(1, options);
 
 	return EXIT_SUCCESS;
 }

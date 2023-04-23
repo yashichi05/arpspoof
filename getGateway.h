@@ -1,0 +1,1 @@
+int getGateway(int index);
